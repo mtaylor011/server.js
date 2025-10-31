@@ -1,0 +1,5 @@
+{
+  "name": "Slurveball",
+  "description": "Slurveball is a fast-paced 3D-style pong game. Control your paddle with the mouse and defeat the AI opponent. Inspired by the classic flash game Curveball.",
+  "requestFramePermissions": []
+}

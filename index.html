@@ -1,0 +1,1081 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='0.9em'%20font-size='90'%3E🎾%3C/text%3E%3C/svg%3E">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Slurveball is a fast-paced 3D-style pong game. Control your paddle with the mouse and defeat the AI opponent. Inspired by the classic flash game Curveball.">
+    <title>Slurveball</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #000;
+        color: #fff;
+      }
+      .perspective-container {
+        perspective: 1000px;
+      }
+      .preserve-3d {
+        transform-style: preserve-3d;
+      }
+       .neon-text {
+        text-shadow:
+          0 0 5px rgba(0, 255, 255, 0.8),
+          0 0 10px rgba(0, 255, 255, 0.8),
+          0 0 20px rgba(0, 255, 255, 0.8),
+          0 0 40px rgba(0, 191, 255, 0.8),
+          0 0 80px rgba(0, 191, 255, 0.8);
+      }
+      .neon-box-cyan {
+        box-shadow: 
+          0 0 5px rgba(0, 255, 255, 0.8),
+          0 0 10px rgba(0, 255, 255, 0.8),
+          inset 0 0 5px rgba(0, 255, 255, 0.7);
+      }
+      .neon-box-fuchsia {
+        box-shadow: 
+          0 0 5px rgba(255, 0, 255, 0.8),
+          0 0 10px rgba(255, 0, 255, 0.8),
+          inset 0 0 5px rgba(255, 0, 255, 0.7);
+      }
+       .ball-glow {
+        box-shadow: 
+          0 0 10px #fff,
+          0 0 20px #0ff,
+          0 0 30px #0ff;
+      }
+      @keyframes ping-pong {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.1); opacity: 0.9; }
+      }
+      .animate-ping-pong {
+        animation: ping-pong 1.5s ease-in-out infinite;
+      }
+      @keyframes pulse-glow {
+        0%, 100% {
+          text-shadow:
+            0 0 5px rgba(0, 255, 255, 0.8),
+            0 0 10px rgba(0, 255, 255, 0.8),
+            0 0 20px rgba(0, 255, 255, 0.8);
+        }
+        50% {
+          text-shadow:
+            0 0 10px rgba(0, 255, 255, 1),
+            0 0 20px rgba(0, 255, 255, 1),
+            0 0 40px rgba(0, 191, 255, 1);
+        }
+      }
+      .animate-pulse-glow {
+        animation: pulse-glow 2s ease-in-out infinite;
+      }
+       @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      .animate-fadeIn {
+        animation: fadeIn 1s ease-in-out;
+      }
+      @keyframes pop-and-fade {
+        0% { transform: translate(-50%, -50%) scale(0.5) rotate(-15deg); opacity: 0; }
+        20% { transform: translate(-50%, -50%) scale(1.1) rotate(-5deg); opacity: 1; }
+        80% { transform: translate(-50%, -50%) scale(1) rotate(-5deg); opacity: 1; }
+        100% { transform: translate(-50%, -50%) scale(0.8) rotate(-15deg); opacity: 0; }
+      }
+      .animate-pop-and-fade {
+          animation: pop-and-fade 1.5s ease-in-out forwards;
+      }
+    </style>
+    <!-- React and Babel for in-browser JSX transpilation -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+      const { useState, useCallback, useRef, useEffect } = React;
+
+      const ARENA_WIDTH = 1000;
+      const ARENA_HEIGHT = 750;
+      const ARENA_DEPTH = 2250;
+      const PADDLE_WIDTH = 160;
+      const PADDLE_HEIGHT = 130;
+      const PADDLE_DEPTH = 20;
+      const PLAYER_PADDLE_Z = 0;
+      const AI_PADDLE_Z = ARENA_DEPTH - PADDLE_DEPTH;
+      const PLAYER_SERVE_Z = 50;
+      const BALL_RADIUS = 20;
+      const BALL_INITIAL_SPEED_Z = 12; // Increased to maintain game pace
+      const BALL_SPEED_INCREASE_FACTOR = 1.05;
+      const BALL_MAX_SPEED_Z = 38; // Increased to maintain game pace
+      const CURVE_FACTOR = 0.5; // Player paddle velocity influence
+      const GLANCE_FACTOR = 15; // Edge-hit influence
+      const BALL_DAMPING_FACTOR = 0.4; // How much of the ball's incoming X/Y velocity is preserved
+      const SERVE_CURVE_FACTOR = 0.05; // For the "pull" serve mechanic
+      const AI_PADDLE_SPEED = 0.08;
+      const WIN_SCORE = 5;
+      const SCORE_PAUSE_DURATION = 1500; // in ms
+      const SERVE_DELAY = 500; // in ms
+
+      const GameStatus = {
+        MainMenu: 'MainMenu',
+        MultiplayerSetup: 'MultiplayerSetup',
+        Playing: 'Playing',
+        PlayerScored: 'PlayerScored',
+        AIScored: 'AIScored',
+        OpponentScored: 'OpponentScored',
+        GameOver: 'GameOver',
+        PlayerServe: 'PlayerServe',
+      };
+
+      const MainMenu = ({ onStartGame, onStartMultiplayer }) => {
+        return (
+          <div className="text-center text-cyan-300 animate-fadeIn">
+            <h1 className="text-6xl md:text-8xl font-bold neon-text mb-12">SLURVEBALL</h1>
+            <div className="flex flex-col items-center gap-6">
+                <button
+                  onClick={onStartGame}
+                  className="w-64 px-8 py-4 bg-transparent border-2 border-cyan-400 text-cyan-400 text-xl font-bold rounded-lg
+                             hover:bg-cyan-400 hover:text-black transition-all duration-300
+                             focus:outline-none focus:ring-4 focus:ring-cyan-500
+                             shadow-[0_0_15px_rgba(0,255,255,0.6)] hover:shadow-[0_0_25px_rgba(0,255,255,0.9)]"
+                >
+                  Single Player
+                </button>
+                <button
+                  onClick={onStartMultiplayer}
+                  className="w-64 px-8 py-4 bg-transparent border-2 border-fuchsia-500 text-fuchsia-500 text-xl font-bold rounded-lg
+                             hover:bg-fuchsia-500 hover:text-black transition-all duration-300
+                             focus:outline-none focus:ring-4 focus:ring-fuchsia-600
+                             shadow-[0_0_15px_rgba(255,0,255,0.6)] hover:shadow-[0_0_25px_rgba(255,0,255,0.9)]"
+                >
+                  Play Online (P2P)
+                </button>
+            </div>
+             <div className="mt-16 text-sm text-gray-400">
+              <p>Move mouse to control your paddle.</p>
+              <p>First to 5 points wins.</p>
+            </div>
+          </div>
+        );
+      };
+
+      const MultiplayerSetup = ({ onGameStart, onBack }) => {
+        const [status, setStatus] = useState('Create a game or enter an invite code.');
+        const [inviteCode, setInviteCode] = useState('');
+        const [showInviteCode, setShowInviteCode] = useState(false);
+        const [isConnecting, setIsConnecting] = useState(false);
+
+        const peerConnectionRef = useRef(null);
+        const dataChannelRef = useRef(null);
+        const socketRef = useRef(null);
+        const roleRef = useRef(null);
+        const isNegotiating = useRef(false);
+        const clientId = useRef('client-' + Math.random().toString(36).substr(2, 9));
+        const candidateQueue = useRef([]);
+        
+        const SIGNALING_SERVER_BASE_URL = 'ws://localhost:8080/';
+
+        useEffect(() => {
+            return () => {
+                socketRef.current?.close();
+                peerConnectionRef.current?.close();
+            };
+        }, []);
+
+        const setupDataChannel = useCallback(() => {
+            if (!dataChannelRef.current) return;
+            dataChannelRef.current.onopen = () => {
+                 if (roleRef.current === 'host') {
+                   onGameStart(dataChannelRef.current, 'p2pHost');
+                 } else if (roleRef.current === 'guest') {
+                   onGameStart(dataChannelRef.current, 'p2pGuest');
+                 }
+            };
+            dataChannelRef.current.onclose = () => {
+                setStatus('Opponent disconnected.');
+                setIsConnecting(false);
+            };
+             dataChannelRef.current.onerror = (error) => {
+                console.error("Data channel error:", error);
+                setStatus('Connection error.');
+                setIsConnecting(false);
+            };
+        }, [onGameStart]);
+        
+        const createPeerConnection = useCallback(() => {
+            try {
+                candidateQueue.current = []; // Reset candidate queue
+                const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+                peerConnectionRef.current = pc;
+
+                pc.onicecandidate = (event) => {
+                    if (event.candidate && socketRef.current?.readyState === WebSocket.OPEN) {
+                        socketRef.current.send(JSON.stringify({ 
+                            type: 'ice-candidate', 
+                            candidate: event.candidate, 
+                            clientId: clientId.current 
+                        }));
+                    }
+                };
+                
+                pc.onconnectionstatechange = () => {
+                  if(pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                      setStatus('Connection lost. Please try again.');
+                      setIsConnecting(false);
+                      setShowInviteCode(false);
+                  }
+                };
+
+                pc.ondatachannel = (event) => {
+                    dataChannelRef.current = event.channel;
+                    setupDataChannel();
+                };
+            } catch (error) {
+                console.error("Failed to create Peer Connection", error);
+                setStatus('Error: WebRTC is not supported by your browser.');
+                setIsConnecting(false);
+            }
+        }, [setupDataChannel]);
+
+        const handleSignalingMessage = useCallback(async (event) => {
+            let message;
+            try {
+                message = JSON.parse(event.data);
+            } catch (error) {
+                return;
+            }
+
+            if (message.clientId === clientId.current) return;
+
+            const pc = peerConnectionRef.current;
+            if (!pc) return;
+
+            try {
+                if (roleRef.current === 'host' && message.type === 'join' && !isNegotiating.current) {
+                    isNegotiating.current = true;
+                    setStatus('Opponent found! Creating connection offer...');
+                    dataChannelRef.current = pc.createDataChannel('gameData');
+                    setupDataChannel();
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    socketRef.current.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription, clientId: clientId.current }));
+                } 
+                else if (roleRef.current === 'guest' && message.type === 'offer') {
+                    isNegotiating.current = true;
+                    setStatus('Offer received. Creating answer...');
+                    await pc.setRemoteDescription(new RTCSessionDescription(message.sdp));
+                    
+                    while (candidateQueue.current.length > 0) {
+                        const candidate = candidateQueue.current.shift();
+                        await pc.addIceCandidate(candidate);
+                    }
+                    
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    socketRef.current.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription, clientId: clientId.current }));
+                }
+                else if (roleRef.current === 'host' && message.type === 'answer') {
+                    setStatus('Answer received. Establishing connection...');
+                    await pc.setRemoteDescription(new RTCSessionDescription(message.sdp));
+                    
+                    while (candidateQueue.current.length > 0) {
+                        const candidate = candidateQueue.current.shift();
+                        await pc.addIceCandidate(candidate);
+                    }
+                }
+                else if (message.type === 'ice-candidate' && message.candidate) {
+                    const candidate = new RTCIceCandidate(message.candidate);
+                    if (pc.remoteDescription) {
+                        await pc.addIceCandidate(candidate);
+                    } else {
+                        candidateQueue.current.push(candidate);
+                    }
+                }
+            } catch (error) {
+                console.error('Error during signaling:', error);
+                setStatus('Error: Connection handshake failed.');
+                setIsConnecting(false);
+            }
+        }, [setupDataChannel]);
+        
+        const connectToSignaling = useCallback((code) => {
+            return new Promise((resolve, reject) => {
+                try {
+                    if (socketRef.current && socketRef.current.readyState !== WebSocket.CLOSED) {
+                        socketRef.current.close();
+                    }
+
+                    const socket = new WebSocket(`${SIGNALING_SERVER_BASE_URL}${code}`);
+                    socketRef.current = socket;
+
+                    let didConnect = false; // Flag to avoid overwriting specific errors
+
+                    socket.onopen = () => {
+                        didConnect = true;
+                        resolve(socket);
+                    };
+                    socket.onmessage = handleSignalingMessage;
+                    socket.onerror = (err) => {
+                        console.error('A WebSocket error occurred, causing the connection to close.');
+                        setStatus('Signaling server connection failed. Is your local server running?');
+                        setIsConnecting(false);
+                        reject(new Error('WebSocket connection failed.'));
+                    };
+                    socket.onclose = () => {
+                         if (didConnect && peerConnectionRef.current?.connectionState !== 'connected') {
+                            setStatus('Disconnected from matchmaking server.');
+                         }
+                    };
+
+                } catch (error) {
+                    console.error('Error creating WebSocket:', error);
+                    setStatus('Error: Failed to initialize connection. A browser extension might be blocking it.');
+                    setIsConnecting(false);
+                    reject(error);
+                }
+            });
+        }, [handleSignalingMessage]);
+
+        const handleHost = async () => {
+            setIsConnecting(true);
+            isNegotiating.current = false;
+            setStatus('Generating invite code...');
+            const newCode = 'GAME-' + Math.floor(10000 + Math.random() * 90000);
+            setInviteCode(newCode);
+            setShowInviteCode(true);
+
+            try {
+                createPeerConnection();
+                roleRef.current = 'host';
+                await connectToSignaling(newCode);
+                setStatus('Waiting for an opponent to join...');
+            } catch (e) {
+                setShowInviteCode(false);
+                setIsConnecting(false);
+            }
+        };
+
+        const handleJoin = async () => {
+            if (!inviteCode) {
+                setStatus('Please enter an invite code.');
+                return;
+            }
+            setIsConnecting(true);
+            isNegotiating.current = false;
+            setStatus(`Connecting to room ${inviteCode}...`);
+        
+            try {
+                createPeerConnection();
+                roleRef.current = 'guest';
+        
+                const socket = await connectToSignaling(inviteCode);
+                const joinPayload = { type: 'join', clientId: clientId.current };
+                socket.send(JSON.stringify(joinPayload));
+                setStatus('Join request sent. Waiting for host response...');
+            } catch (e) {
+                console.error('Failed to join:', e.message);
+                setIsConnecting(false);
+            }
+        };
+
+        const copyToClipboard = () => {
+          navigator.clipboard.writeText(inviteCode).then(() => {
+            setStatus('Copied to clipboard! Send it to your friend.');
+          });
+        };
+
+        return (
+          <div className="text-center text-white animate-fadeIn w-full max-w-lg mx-auto p-4">
+            <h1 className="text-4xl font-bold neon-text mb-4">P2P Multiplayer</h1>
+            <p className="mb-6 text-cyan-300 min-h-[24px]">{status}</p>
+            
+            <div className="bg-black bg-opacity-50 p-6 rounded-lg border border-gray-700 space-y-6">
+                {showInviteCode ? (
+                    <div className="flex flex-col items-center gap-4">
+                        <p>Your Invite Code:</p>
+                        <div className="px-4 py-2 bg-gray-800 text-2xl font-bold tracking-widest rounded border border-cyan-500">
+                            {inviteCode}
+                        </div>
+                        <button onClick={copyToClipboard} className="w-48 px-4 py-2 bg-cyan-500 text-black font-bold rounded-lg hover:bg-cyan-400 disabled:bg-gray-600 transition">
+                            Copy Code
+                        </button>
+                    </div>
+                ) : (
+                    <>
+                        <div className="flex flex-col items-center gap-4">
+                            <button onClick={handleHost} disabled={isConnecting} className="w-64 px-8 py-4 bg-cyan-500 text-black font-bold rounded-lg hover:bg-cyan-400 disabled:bg-gray-600 transition">
+                                Host New Game
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <hr className="flex-grow border-gray-600" />
+                            <span className="text-gray-400">OR</span>
+                            <hr className="flex-grow border-gray-600" />
+                        </div>
+                        <div className="flex flex-col items-center gap-4">
+                           <input
+                                type="text"
+                                value={inviteCode}
+                                onChange={e => setInviteCode(e.target.value.toUpperCase())}
+                                placeholder="Enter Invite Code"
+                                disabled={isConnecting}
+                                className="w-64 p-3 text-center bg-gray-800 text-white rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-fuchsia-500 placeholder-gray-500"
+                           />
+                            <button onClick={handleJoin} disabled={isConnecting || !inviteCode} className="w-64 px-8 py-4 bg-fuchsia-500 text-black font-bold rounded-lg hover:bg-fuchsia-400 disabled:bg-gray-600 transition">
+                                Join Game
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+            <button onClick={onBack} disabled={isConnecting} className="mt-6 text-gray-400 hover:text-white disabled:text-gray-600">
+              Back to Main Menu
+            </button>
+          </div>
+        )
+      };
+
+      const GameOver = ({ winner, onPlayAgain, isMultiplayer }) => {
+        const message = winner === 'player' ? 'YOU WIN!' : isMultiplayer ? 'OPPONENT WINS' : 'AI WINS';
+        const colorClass = winner === 'player' ? 'text-cyan-300' : 'text-red-500';
+
+        return (
+          <div className="text-center animate-fadeIn">
+            <h1 className={`text-6xl md:text-8xl font-bold mb-8 ${colorClass}`} style={{
+              textShadow: winner === 'player' 
+                ? '0 0 10px #0ff, 0 0 20px #0ff' 
+                : '0 0 10px #f00, 0 0 20px #f00'
+            }}>
+              {message}
+            </h1>
+            <button
+              onClick={onPlayAgain}
+              className="px-8 py-4 bg-transparent border-2 border-cyan-400 text-cyan-400 text-xl font-bold rounded-lg
+                         hover:bg-cyan-400 hover:text-black transition-all duration-300
+                         focus:outline-none focus:ring-4 focus:ring-cyan-500
+                         shadow-[0_0_15px_rgba(0,255,255,0.6)] hover:shadow-[0_0_25px_rgba(0,255,255,0.9)]"
+            >
+              Play Again
+            </button>
+          </div>
+        );
+      };
+
+      const HUD = ({ playerScore, aiScore, status, isMultiplayer }) => {
+        const opponentName = isMultiplayer ? 'OPPONENT' : 'AI';
+        const getStatusMessage = () => {
+          if (status === GameStatus.PlayerScored) return "YOU SCORED!";
+          if (status === GameStatus.AIScored) return isMultiplayer ? "OPPONENT SCORED!" : "AI SCORED!";
+          if (status === GameStatus.PlayerServe) return isMultiplayer ? "Waiting for Host to Serve" : "Move to ball & Click to Serve";
+          return null;
+        }
+        const statusMessage = getStatusMessage();
+        const messageAnimationClass = status === GameStatus.PlayerServe ? 'animate-pulse-glow' : 'animate-ping-pong';
+
+        return (
+          <div className="absolute top-0 left-0 right-0 p-4 text-white pointer-events-none">
+            <div className="container mx-auto flex justify-between items-center text-3xl font-bold">
+              <div className="text-cyan-300 neon-text">
+                <span>YOU: </span>
+                <span>{playerScore}</span>
+              </div>
+              <div className="text-fuchsia-500" style={{textShadow: '0 0 10px #f0f, 0 0 20px #f0f'}}>
+                <span>{opponentName}: </span>
+                <span>{aiScore}</span>
+              </div>
+            </div>
+            {statusMessage && (
+               <div className={`absolute top-1/2 left-1/2 text-5xl font-bold text-center neon-text ${messageAnimationClass}`}
+                    style={{ transform: 'translate(-50%, -50%)' }}
+                >
+                  {statusMessage}
+               </div>
+            )}
+          </div>
+        );
+      };
+
+      const Game = ({ onGameOver, gameMode = 'singlePlayer', dataChannel = null }) => {
+        const TRAIL_LENGTH = 10;
+        const [scores, setScores] = useState({ player: 0, ai: 0 });
+        const [gameStatus, setGameStatus] = useState(null);
+        const [scale, setScale] = useState(1);
+        const [announcement, setAnnouncement] = useState({ message: null, key: 0 });
+        
+        const gameAreaRef = useRef(null);
+        const animationFrameId = useRef(null);
+        const announcementTimeoutRef = useRef(null);
+        const ballPos = useRef({ x: 0, y: 0, z: ARENA_DEPTH / 2 });
+        const ballVel = useRef({ x: 0, y: 0, z: 0 });
+        const paddlePos = useRef({ x: 0, y: 0 });
+        const paddleVel = useRef({ x: 0, y: 0 });
+        const aiPaddlePos = useRef({ x: 0, y: 0 });
+        const guestPaddleVel = useRef({ x: 0, y: 0 }); // for host to calculate spin
+        const gameStatusRef = useRef(gameStatus);
+        const mousePos = useRef({ x: 0, y: 0 });
+        const isMultiplayer = gameMode.startsWith('p2p');
+        
+        useEffect(() => {
+          gameStatusRef.current = gameStatus;
+        }, [gameStatus]);
+
+        const ballRef = useRef(null);
+        const playerPaddleRef = useRef(null);
+        const aiPaddleRef = useRef(null);
+        const impactGlowRef = useRef(null);
+        const trailPositions = useRef([]);
+        const trailRefs = useRef(
+          Array(TRAIL_LENGTH).fill(null).map(() => React.createRef())
+        );
+        
+        useEffect(() => {
+            setGameStatus(GameStatus.PlayerServe);
+        }, []);
+        
+        useEffect(() => {
+          if (!dataChannel) return;
+
+          dataChannel.onmessage = (event) => {
+              const msg = JSON.parse(event.data);
+              
+              if (gameMode === 'p2pHost' && msg.type === 'paddleMove') {
+                  const lastX = aiPaddlePos.current.x;
+                  const lastY = aiPaddlePos.current.y;
+                  aiPaddlePos.current = msg.pos;
+                  guestPaddleVel.current.x = aiPaddlePos.current.x - lastX;
+                  guestPaddleVel.current.y = aiPaddlePos.current.y - lastY;
+              } else if (gameMode === 'p2pGuest' && msg.type === 'gameState') {
+                  ballPos.current = msg.ballPos;
+                  ballVel.current = msg.ballVel;
+                  paddlePos.current = msg.hostPaddlePos;
+                  aiPaddlePos.current = msg.guestPaddlePos;
+              } else if (msg.type === 'scoreUpdate') {
+                  setScores(msg.scores);
+                  setGameStatus(msg.status);
+              } else if (msg.type === 'serve') {
+                  ballPos.current = msg.ballPos;
+                  ballVel.current = msg.ballVel;
+                  setGameStatus(GameStatus.Playing);
+              } else if (msg.type === 'announcement') {
+                  showAnnouncement(msg.message);
+              }
+          };
+          
+          dataChannel.onclose = () => {
+              if (gameStatusRef.current !== 'GameOver') {
+                alert('Opponent disconnected.');
+                onGameOver(scores.ai > scores.player ? 'opponent' : 'player');
+              }
+          };
+        }, [dataChannel, gameMode]);
+
+
+        const showAnnouncement = useCallback((message) => {
+            if (isMultiplayer && gameMode === 'p2pHost') {
+                dataChannel?.send(JSON.stringify({ type: 'announcement', message }));
+            }
+            if (announcementTimeoutRef.current) {
+                clearTimeout(announcementTimeoutRef.current);
+            }
+            setAnnouncement(prev => ({ message, key: prev.key + 1 }));
+            announcementTimeoutRef.current = setTimeout(() => {
+                setAnnouncement(prev => ({ ...prev, message: null }));
+            }, 1500);
+        }, [isMultiplayer, gameMode, dataChannel]);
+
+
+        const ArenaWall = ({ transform, width, height, isGrid }) => {
+          const gridColor = 'rgba(0, 255, 255, 0.2)';
+          const lineStyle = {
+            position: 'absolute',
+            backgroundColor: gridColor,
+          };
+          
+          const renderGrid = () => {
+            const lines = [];
+            const numLinesMajor = Math.floor(height / 100);
+            const numLinesMinor = Math.floor(width / 50);
+
+            for (let i = 1; i < numLinesMajor; i++) {
+                lines.push(<div key={`h-${i}`} style={{...lineStyle, top: `${(i / numLinesMajor) * 100}%`, left: 0, right: 0, height: '1px'}} />);
+            }
+            for (let i = 1; i < numLinesMinor; i++) {
+                lines.push(<div key={`v-${i}`} style={{...lineStyle, left: `${(i / numLinesMinor) * 100}%`, top: 0, bottom: 0, width: '1px'}} />);
+            }
+            return lines;
+          };
+
+          return (
+            <div
+              className="absolute border border-cyan-500/30"
+              style={{
+                width: width,
+                height: height,
+                transform,
+                left: '50%',
+                top: '50%',
+                marginLeft: -width / 2,
+                marginTop: -height / 2,
+              }}
+            >
+                {isGrid && renderGrid()}
+            </div>
+          );
+        };
+        
+        const handleScore = (scorer) => {
+          const newScores = { ...scores };
+          let status;
+          if (scorer === 'player') {
+            newScores.player++;
+            status = GameStatus.PlayerScored;
+          } else {
+            newScores.ai++;
+            status = GameStatus.AIScored;
+          }
+          setScores(newScores);
+          setGameStatus(status);
+          if (isMultiplayer && gameMode === 'p2pHost') {
+            dataChannel?.send(JSON.stringify({ type: 'scoreUpdate', scores: newScores, status }));
+          }
+        };
+
+        const update = useCallback(() => {
+          ballPos.current.x += ballVel.current.x;
+          ballPos.current.y += ballVel.current.y;
+          ballPos.current.z += ballVel.current.z;
+          trailPositions.current.unshift({ ...ballPos.current });
+          if (trailPositions.current.length > TRAIL_LENGTH) {
+              trailPositions.current.pop();
+          }
+
+          if (Math.abs(ballPos.current.x) > ARENA_WIDTH / 2 - BALL_RADIUS) {
+            ballVel.current.x *= -1;
+            ballPos.current.x = Math.sign(ballPos.current.x) * (ARENA_WIDTH / 2 - BALL_RADIUS);
+          }
+          if (Math.abs(ballPos.current.y) > ARENA_HEIGHT / 2 - BALL_RADIUS) {
+            ballVel.current.y *= -1;
+            ballPos.current.y = Math.sign(ballPos.current.y) * (ARENA_HEIGHT / 2 - BALL_RADIUS);
+          }
+          
+          // Player paddle collision
+          if (ballVel.current.z < 0 && ballPos.current.z <= PLAYER_PADDLE_Z + PADDLE_DEPTH + BALL_RADIUS) {
+             if (Math.abs(ballPos.current.x - paddlePos.current.x) < (PADDLE_WIDTH / 2 + BALL_RADIUS) &&
+                 Math.abs(ballPos.current.y - paddlePos.current.y) < (PADDLE_HEIGHT / 2 + BALL_RADIUS) &&
+                 ballPos.current.z > PLAYER_PADDLE_Z) {
+              
+              const impactX = (ballPos.current.x - paddlePos.current.x) / (PADDLE_WIDTH / 2);
+              const impactY = (ballPos.current.y - paddlePos.current.y) / (PADDLE_HEIGHT / 2);
+              const glanceStrength = Math.sqrt(impactX * impactX + impactY * impactY);
+              const dynamicGlanceFactor = GLANCE_FACTOR * (Math.abs(ballVel.current.z) / BALL_INITIAL_SPEED_Z);
+              const glanceEffectX = impactX * glanceStrength * dynamicGlanceFactor;
+              const glanceEffectY = impactY * glanceStrength * dynamicGlanceFactor;
+              const spinX = paddleVel.current.x * CURVE_FACTOR;
+              const spinY = paddleVel.current.y * CURVE_FACTOR;
+              ballVel.current.x = (ballVel.current.x * BALL_DAMPING_FACTOR) + spinX + glanceEffectX;
+              ballVel.current.y = (ballVel.current.y * BALL_DAMPING_FACTOR) + spinY + glanceEffectY;
+              ballVel.current.z *= -1;
+              ballVel.current.z = Math.min(ballVel.current.z * BALL_SPEED_INCREASE_FACTOR, BALL_MAX_SPEED_Z);
+              
+              const totalCurve = Math.sqrt(Math.pow(spinX + glanceEffectX, 2) + Math.pow(spinY + glanceEffectY, 2));
+              if (totalCurve > 15) showAnnouncement('SuperSlurve!');
+              else if (totalCurve > 7) showAnnouncement('Slurveball');
+
+              trailPositions.current = Array(TRAIL_LENGTH).fill({ ...ballPos.current });
+
+              if (impactGlowRef.current) {
+                  const glow = impactGlowRef.current;
+                  const localImpactX = ballPos.current.x - paddlePos.current.x;
+                  const localImpactY = ballPos.current.y - paddlePos.current.y;
+                  glow.style.transform = `translate(${localImpactX}px, ${localImpactY}px) scale(1)`;
+                  glow.style.opacity = '1';
+                  setTimeout(() => {
+                    if (impactGlowRef.current) {
+                      glow.style.transform = `translate(${localImpactX}px, ${localImpactY}px) scale(0)`;
+                      glow.style.opacity = '0';
+                    }
+                  }, 150);
+              }
+            }
+          }
+          
+          // Opponent paddle collision
+          if (ballVel.current.z > 0 && ballPos.current.z >= AI_PADDLE_Z - BALL_RADIUS) {
+             if (Math.abs(ballPos.current.x - aiPaddlePos.current.x) < (PADDLE_WIDTH / 2 + BALL_RADIUS) &&
+                 Math.abs(ballPos.current.y - aiPaddlePos.current.y) < (PADDLE_HEIGHT / 2 + BALL_RADIUS)) {
+                 
+                 if (isMultiplayer) { // P2P guest paddle physics
+                    const impactX = (ballPos.current.x - aiPaddlePos.current.x) / (PADDLE_WIDTH / 2);
+                    const impactY = (ballPos.current.y - aiPaddlePos.current.y) / (PADDLE_HEIGHT / 2);
+                    const spinX = guestPaddleVel.current.x * CURVE_FACTOR;
+                    const spinY = guestPaddleVel.current.y * CURVE_FACTOR;
+                    ballVel.current.x = (ballVel.current.x * BALL_DAMPING_FACTOR) + spinX + (impactX * GLANCE_FACTOR * 0.8);
+                    ballVel.current.y = (ballVel.current.y * BALL_DAMPING_FACTOR) + spinY + (impactY * GLANCE_FACTOR * 0.8);
+                 }
+
+                 ballVel.current.z *= -1;
+                 ballVel.current.z = Math.max(ballVel.current.z * BALL_SPEED_INCREASE_FACTOR, -BALL_MAX_SPEED_Z);
+                 trailPositions.current = Array(TRAIL_LENGTH).fill({ ...ballPos.current });
+             }
+          }
+
+          if (ballPos.current.z < PLAYER_PADDLE_Z) {
+            handleScore('ai');
+          } else if (ballPos.current.z > ARENA_DEPTH) {
+            handleScore('player');
+          }
+          
+          // AI Logic
+          if (!isMultiplayer) {
+            const targetX = ballPos.current.x;
+            const targetY = ballPos.current.y;
+            aiPaddlePos.current.x += (targetX - aiPaddlePos.current.x) * AI_PADDLE_SPEED;
+            aiPaddlePos.current.y += (targetY - aiPaddlePos.current.y) * AI_PADDLE_SPEED;
+            aiPaddlePos.current.x = Math.max(-ARENA_WIDTH/2 + PADDLE_WIDTH/2, Math.min(ARENA_WIDTH/2 - PADDLE_WIDTH/2, aiPaddlePos.current.x));
+            aiPaddlePos.current.y = Math.max(-ARENA_HEIGHT/2 + PADDLE_HEIGHT/2, Math.min(ARENA_HEIGHT/2 - PADDLE_HEIGHT/2, aiPaddlePos.current.y));
+          }
+        }, [showAnnouncement, isMultiplayer, scores]);
+
+        const draw = useCallback(() => {
+          if (ballRef.current) {
+            ballRef.current.style.transform = `translate3d(${ballPos.current.x}px, ${ballPos.current.y}px, ${-ballPos.current.z}px)`;
+            const opacity = 1 - (ballPos.current.z / (ARENA_DEPTH * 1.5));
+            ballRef.current.style.opacity = `${Math.max(0.3, opacity)}`;
+          }
+          trailRefs.current.forEach((ref, index) => {
+              if (ref.current && trailPositions.current[index]) {
+                  const pos = trailPositions.current[index];
+                  const trailOpacity = (gameStatusRef.current === GameStatus.Playing) ? 0.3 * (1 - (index + 1) / TRAIL_LENGTH) : 0;
+                  const trailScale = 1 - (index + 1) / TRAIL_LENGTH;
+                  ref.current.style.transform = `translate3d(${pos.x}px, ${pos.y}px, ${-pos.z}px) scale(${trailScale})`;
+                  ref.current.style.opacity = `${trailOpacity}`;
+              }
+          });
+          if (playerPaddleRef.current) {
+              playerPaddleRef.current.style.transform = `translate3d(${paddlePos.current.x}px, ${paddlePos.current.y}px, ${-PLAYER_PADDLE_Z}px)`;
+          }
+          if (aiPaddleRef.current) {
+              aiPaddleRef.current.style.transform = `translate3d(${aiPaddlePos.current.x}px, ${aiPaddlePos.current.y}px, ${-AI_PADDLE_Z}px)`;
+          }
+        }, []);
+        
+        const updatePaddlePosition = (isHost) => {
+          if (!gameAreaRef.current) return;
+          const rect = gameAreaRef.current.getBoundingClientRect();
+          const x = (mousePos.current.x - rect.width / 2) * (ARENA_WIDTH / rect.width);
+          const y = (mousePos.current.y - rect.height / 2) * (ARENA_HEIGHT / rect.height);
+          const clampedX = Math.max(-ARENA_WIDTH/2 + PADDLE_WIDTH/2, Math.min(ARENA_WIDTH/2 - PADDLE_WIDTH/2, x));
+          const clampedY = Math.max(-ARENA_HEIGHT/2 + PADDLE_HEIGHT/2, Math.min(ARENA_HEIGHT/2 - PADDLE_HEIGHT/2, y));
+
+          if (isHost) {
+            const lastX = paddlePos.current.x;
+            const lastY = paddlePos.current.y;
+            paddlePos.current.x = clampedX;
+            paddlePos.current.y = clampedY;
+            paddleVel.current.x = paddlePos.current.x - lastX;
+            paddleVel.current.y = paddlePos.current.y - lastY;
+          } else { // Guest
+            dataChannel?.send(JSON.stringify({ type: 'paddleMove', pos: { x: clampedX, y: clampedY }}));
+          }
+        };
+
+        const gameLoop = useCallback(() => {
+          if (gameMode === 'p2pHost' || gameMode === 'singlePlayer') {
+              updatePaddlePosition(true);
+          } else if (gameMode === 'p2pGuest') {
+              updatePaddlePosition(false);
+          }
+          
+          if (gameMode === 'p2pHost' || gameMode === 'singlePlayer') {
+            if (gameStatusRef.current === GameStatus.Playing) {
+              update();
+            }
+          }
+          
+          if (gameMode === 'p2pHost' && dataChannel?.readyState === 'open') {
+              dataChannel.send(JSON.stringify({
+                  type: 'gameState',
+                  ballPos: ballPos.current,
+                  ballVel: ballVel.current,
+                  hostPaddlePos: paddlePos.current,
+                  guestPaddlePos: aiPaddlePos.current,
+              }));
+          }
+
+          draw();
+          animationFrameId.current = requestAnimationFrame(gameLoop);
+        }, [update, draw, gameMode, dataChannel]);
+        
+        useEffect(() => {
+            animationFrameId.current = requestAnimationFrame(gameLoop);
+            return () => cancelAnimationFrame(animationFrameId.current);
+        }, [gameLoop]);
+
+        useEffect(() => {
+          const calculateScale = () => {
+              const screenWidth = window.innerWidth;
+              const screenHeight = window.innerHeight;
+              const scaleX = screenWidth / ARENA_WIDTH;
+              const scaleY = screenHeight / ARENA_HEIGHT;
+              setScale(Math.min(scaleX, scaleY));
+          };
+          calculateScale();
+          window.addEventListener('resize', calculateScale);
+          return () => window.removeEventListener('resize', calculateScale);
+        }, []);
+        
+        useEffect(() => {
+            if (gameStatus === GameStatus.PlayerServe) {
+                ballPos.current = { x: 0, y: 0, z: PLAYER_SERVE_Z };
+                ballVel.current = { x: 0, y: 0, z: 0 };
+                trailPositions.current = Array(TRAIL_LENGTH).fill({ ...ballPos.current });
+
+                const handleClick = (e) => {
+                    if (gameStatusRef.current !== GameStatus.PlayerServe || !gameAreaRef.current) return;
+                    if (isMultiplayer && gameMode === 'p2pGuest') return; // Only host can serve
+
+                    const rect = gameAreaRef.current.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+                    const paddleX = (mouseX - rect.width / 2) * (ARENA_WIDTH / rect.width);
+                    const paddleY = (mouseY - rect.height / 2) * (ARENA_HEIGHT / rect.height);
+
+                    const isOverBall = Math.abs(paddleX) < (PADDLE_WIDTH / 2 + BALL_RADIUS) && 
+                                       Math.abs(paddleY) < (PADDLE_HEIGHT / 2 + BALL_RADIUS);
+                    
+                    if (isOverBall) {
+                        const newBallVel = {
+                            x: paddleX * SERVE_CURVE_FACTOR,
+                            y: paddleY * SERVE_CURVE_FACTOR,
+                            z: BALL_INITIAL_SPEED_Z,
+                        };
+                        ballVel.current = newBallVel;
+                        if (isMultiplayer && gameMode === 'p2pHost') {
+                          dataChannel?.send(JSON.stringify({ type: 'serve', ballPos: ballPos.current, ballVel: newBallVel}));
+                        }
+                        setGameStatus(GameStatus.Playing);
+                    }
+                };
+                window.addEventListener('click', handleClick);
+                return () => window.removeEventListener('click', handleClick);
+
+            }
+        }, [gameStatus, isMultiplayer, gameMode, dataChannel]);
+
+        useEffect(() => {
+          if (gameStatus === GameStatus.PlayerScored || gameStatus === GameStatus.AIScored) {
+            if (scores.player >= WIN_SCORE) {
+              onGameOver('player');
+            } else if (scores.ai >= WIN_SCORE) {
+              onGameOver(isMultiplayer ? 'opponent' : 'ai');
+            } else {
+              setTimeout(() => setGameStatus(GameStatus.PlayerServe), SCORE_PAUSE_DURATION);
+            }
+          }
+        }, [gameStatus, scores, onGameOver, isMultiplayer]);
+
+        useEffect(() => {
+          const handleMouseMove = (e) => {
+              if (!gameAreaRef.current) return;
+              const rect = gameAreaRef.current.getBoundingClientRect();
+              mousePos.current = {
+                  x: e.clientX - rect.left,
+                  y: e.clientY - rect.top,
+              };
+          };
+          window.addEventListener('mousemove', handleMouseMove);
+          return () => window.removeEventListener('mousemove', handleMouseMove);
+        }, []);
+        
+        return (
+          <div className="w-full h-full flex items-center justify-center">
+             <div style={{ transform: `scale(${scale})` }}>
+                <div 
+                    ref={gameAreaRef} 
+                    className="relative perspective-container preserve-3d"
+                    style={{ 
+                        width: ARENA_WIDTH, 
+                        height: ARENA_HEIGHT,
+                        transformOrigin: 'center',
+                        cursor: gameStatus === GameStatus.Playing ? 'none' : 'default',
+                    }}
+                >
+                    <HUD playerScore={scores.player} aiScore={scores.ai} status={gameStatus} isMultiplayer={isMultiplayer} />
+
+                    {announcement.message && (
+                        <div
+                            key={announcement.key}
+                            className="absolute top-[20%] left-1/2 text-6xl font-black text-white pointer-events-none animate-pop-and-fade"
+                            style={{
+                                transform: 'translate(-50%, -50%)',
+                                textShadow: '0 0 8px rgba(255,0,255,0.8), 0 0 15px rgba(255,0,255,0.8)'
+                            }}
+                        >
+                            {announcement.message}
+                        </div>
+                    )}
+                    
+                    <ArenaWall width={ARENA_WIDTH} height={ARENA_DEPTH} isGrid transform={`translate3d(0, ${-ARENA_HEIGHT/2}px, ${-ARENA_DEPTH/2}px) rotateX(90deg)`} />
+                    <ArenaWall width={ARENA_WIDTH} height={ARENA_DEPTH} isGrid transform={`translate3d(0, ${ARENA_HEIGHT/2}px, ${-ARENA_DEPTH/2}px) rotateX(-90deg)`} />
+                    <ArenaWall width={ARENA_DEPTH} height={ARENA_HEIGHT} isGrid transform={`translate3d(${-ARENA_WIDTH/2}px, 0, ${-ARENA_DEPTH/2}px) rotateY(-90deg)`} />
+                    <ArenaWall width={ARENA_DEPTH} height={ARENA_HEIGHT} isGrid transform={`translate3d(${ARENA_WIDTH/2}px, 0, ${-ARENA_DEPTH/2}px) rotateY(90deg)`} />
+                    <div 
+                        className="absolute border-2 border-fuchsia-500" 
+                        style={{
+                            width: ARENA_WIDTH, 
+                            height: ARENA_HEIGHT,
+                            left: '50%',
+                            top: '50%',
+                            marginLeft: -ARENA_WIDTH / 2,
+                            marginTop: -ARENA_HEIGHT / 2,
+                            transform: `translateZ(${-ARENA_DEPTH}px)`
+                        }}/>
+
+                    <div 
+                        ref={playerPaddleRef}
+                        className="absolute border-4 border-cyan-400 neon-box-cyan rounded-md"
+                        style={{ 
+                            width: PADDLE_WIDTH, 
+                            height: PADDLE_HEIGHT,
+                            left: '50%',
+                            top: '50%',
+                            marginLeft: -PADDLE_WIDTH / 2,
+                            marginTop: -PADDLE_HEIGHT / 2,
+                        }}>
+                          <div
+                              ref={impactGlowRef}
+                              className="absolute rounded-full"
+                              style={{
+                                  width: BALL_RADIUS * 4,
+                                  height: BALL_RADIUS * 4,
+                                  left: '50%',
+                                  top: '50%',
+                                  marginLeft: -BALL_RADIUS * 2,
+                                  marginTop: -BALL_RADIUS * 2,
+                                  background: 'radial-gradient(circle, rgba(0,255,255,0.7) 0%, rgba(0,255,255,0) 60%)',
+                                  transform: 'scale(0)',
+                                  opacity: 0,
+                                  transition: 'transform 0.15s ease-out, opacity 0.15s ease-out',
+                                  pointerEvents: 'none',
+                              }}
+                          />
+                    </div>
+                    
+                    <div 
+                        ref={aiPaddleRef}
+                        className="absolute bg-fuchsia-500/80 neon-box-fuchsia rounded-md"
+                        style={{
+                            width: PADDLE_WIDTH,
+                            height: PADDLE_HEIGHT,
+                            left: '50%',
+                            top: '50%',
+                            marginLeft: -PADDLE_WIDTH / 2,
+                            marginTop: -PADDLE_HEIGHT / 2,
+                        }}/>
+
+                    <div 
+                        ref={ballRef}
+                        className="absolute bg-white rounded-full ball-glow"
+                        style={{
+                            width: BALL_RADIUS * 2,
+                            height: BALL_RADIUS * 2,
+                            left: '50%',
+                            top: '50%',
+                            marginLeft: -BALL_RADIUS,
+                            marginTop: -BALL_RADIUS,
+                        }} />
+                    
+                    {trailRefs.current.map((ref, i) => (
+                        <div
+                            key={i}
+                            ref={ref}
+                            className="absolute bg-cyan-200 rounded-full"
+                            style={{
+                                width: BALL_RADIUS * 2,
+                                height: BALL_RADIUS * 2,
+                                left: '50%',
+                                top: '50%',
+                                marginLeft: -BALL_RADIUS,
+                                marginTop: -BALL_RADIUS,
+                                filter: 'blur(5px)',
+                                pointerEvents: 'none',
+                                mixBlendMode: 'screen',
+                            }}
+                        />
+                    ))}
+                </div>
+              </div>
+          </div>
+        );
+      };
+
+      const FullApp = () => {
+        const [appStatus, setAppStatus] = useState('MainMenu');
+        const [winner, setWinner] = useState(null);
+        const [gameKey, setGameKey] = useState(0);
+        const [gameMode, setGameMode] = useState('singlePlayer');
+        const dataChannelRef = useRef(null);
+
+        const handleStartGame = useCallback(() => {
+          setGameMode('singlePlayer');
+          dataChannelRef.current = null;
+          setAppStatus('PlayerServe');
+          setWinner(null);
+          setGameKey(prevKey => prevKey + 1);
+        }, []);
+        
+        const handleStartMultiplayer = useCallback(() => {
+          setAppStatus('MultiplayerSetup');
+        }, []);
+        
+        const handleMultiplayerGameStart = useCallback((channel, role) => {
+            dataChannelRef.current = channel;
+            setGameMode(role);
+            setAppStatus('PlayerServe');
+            setWinner(null);
+            setGameKey(prevKey => prevKey + 1);
+        }, []);
+
+        const handleGameOver = useCallback((winner) => {
+          if (dataChannelRef.current) {
+            dataChannelRef.current.close();
+            dataChannelRef.current = null;
+          }
+          setWinner(winner);
+          setAppStatus('GameOver');
+        }, []);
+        
+        const renderContent = () => {
+            switch (appStatus) {
+                case 'MainMenu':
+                    return <MainMenu onStartGame={handleStartGame} onStartMultiplayer={handleStartMultiplayer} />;
+                case 'MultiplayerSetup':
+                    return <MultiplayerSetup onGameStart={handleMultiplayerGameStart} onBack={() => setAppStatus('MainMenu')} />;
+                case 'GameOver':
+                    return <GameOver winner={winner} onPlayAgain={() => setAppStatus('MainMenu')} isMultiplayer={gameMode.startsWith('p2p')} />;
+                default:
+                    return <Game key={gameKey} onGameOver={handleGameOver} gameMode={gameMode} dataChannel={dataChannelRef.current} />;
+            }
+        };
+
+        return (
+             <div className="w-screen h-screen bg-black flex items-center justify-center font-mono overflow-hidden">
+                {renderContent()}
+            </div>
+        );
+      };
+
+      const rootElement = document.getElementById('root');
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(<FullApp />);
+
+    </script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
